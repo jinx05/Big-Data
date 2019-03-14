@@ -1,0 +1,262 @@
+
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.net.URI;
+import java.text.ParseException;
+import java.text.SimpleDateFormat;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Calendar;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.Locale;
+import java.util.Map;
+import static java.util.Calendar.*;
+import java.util.Date;
+import java.util.Map.Entry;
+import java.util.TreeMap;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.*;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.Mapper;
+import org.apache.hadoop.mapreduce.Reducer;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.input.MultipleInputs;
+import org.apache.hadoop.mapreduce.lib.input.TextInputFormat;
+import org.apache.hadoop.mapreduce.lib.jobcontrol.JobControl;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+import org.apache.hadoop.util.GenericOptionsParser;
+
+
+public class MutualInformation {
+	public static class Map extends Mapper<LongWritable, Text, Text, Text>{
+
+private Text word = new Text("");
+private Text friendList = new Text();
+static HashMap<String, String> userages;
+
+public void setup(Context context) throws IOException{
+	Configuration config = context.getConfiguration();
+	userages = new HashMap<String, String>();
+	String userDataPath = config.get("userDataPath");
+	Path path = new Path("hdfs://localhost:9000" +userDataPath); 
+	//to load user.txt file in all mappers 
+	
+	FileSystem fs = FileSystem.get(config);
+	BufferedReader br = new BufferedReader(new InputStreamReader(fs.open(path)));
+	String userDataInput;
+	userDataInput = br.readLine();
+	while (userDataInput != null) {
+		String[] tempArray = userDataInput.split(",");
+		if (tempArray.length == 10) {
+			String relevantData = tempArray[9];
+			userages.put(tempArray[0].trim(), relevantData); //store key value pair of <user,dob>
+		}
+		userDataInput = br.readLine();
+	}
+	br.close();
+}
+
+public void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
+    String[] line = value.toString().split("\t", -1); //get the user and friend list from file
+    if (line.length < 2 || line[0].trim().isEmpty() || line[1].trim().isEmpty()) 
+    {
+    	return;
+    }
+	
+    String[] friendListArr = line[1].split(",");
+    double net = 0.0, average;
+    LocalDate today = LocalDate.now();
+	DateTimeFormatter formatter = DateTimeFormatter.ofPattern("MM/dd/yyyy");
+	String currDate = today.format(formatter);
+	String date1[] = currDate.split("/");
+	
+    for (int i = 0; i < friendListArr.length; i++) 
+    {
+		String split2 = userages.get(friendListArr[i]); //get dob of user which we stored in the hashmap above
+		String date2[] = split2.split("/");
+		net += (Integer.parseInt(date1[2])-Integer.parseInt(date2[2]));
+    }
+    average = net / friendListArr.length;
+    context.write(word, new Text(line[0]+","+Double.toString(average))); //map gives empty string as key and userid,age as value
+}
+}
+//we send all the userid with their age to sort them in the reducer below.
+public static class Reduce extends Reducer<Text,Text,Text,Text> {
+
+public void reduce(Text key, Iterable<Text> values, Context context) throws IOException, InterruptedException {
+	HashMap<String, Double> map = new HashMap<String, Double>();
+	int count = 0;
+	for (Text value : values) 
+	{
+		String[] splitArr = value.toString().split(",");
+		if (splitArr.length == 2) 
+		{
+			map.put(splitArr[0], Double.parseDouble(splitArr[1])); //give we split the string of userid and age 
+		}
+    }
+HashMap<String, Double> sorted_map = sortByComparator(map, true); //sorting function
+    for (HashMap.Entry<String, Double> entry : sorted_map.entrySet()) 
+    {
+        if (count < 15) 		//only top 15 values(descending order sorted) taken from now onwards.
+        {
+            context.write(new Text(entry.getKey()), new Text(Double.toString(entry.getValue())));
+        } else
+            break;
+        count++;
+    }
+}
+}
+
+//sorting function definition
+private static HashMap<String, Double> sortByComparator(HashMap<String, Double> unsortMap, final boolean order) {
+
+List<Entry<String, Double>> list = new LinkedList<Entry<String, Double>>(unsortMap.entrySet());
+
+Collections.sort(list, new Comparator<Entry<String, Double>>() 
+{
+    public int compare(Entry<String, Double> o1, Entry<String, Double> o2) {
+        if (order)
+        {
+            return o1.getValue().compareTo(o2.getValue());
+        }
+        else
+        {
+            return o2.getValue().compareTo(o1.getValue());
+
+        }
+    }
+});
+
+HashMap<String, Double> sortedMap = new LinkedHashMap<String, Double>();
+for (Entry<String, Double> entry : list)
+{
+    sortedMap.put(entry.getKey(), entry.getValue());
+}
+
+return sortedMap;
+}
+
+public static class Map_2 extends Mapper<LongWritable, Text, Text, Text>{
+
+public void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
+
+String[] line = value.toString().split("\t", -1);
+    if (line.length < 2 || line[0].trim().isEmpty() || line[1].trim().isEmpty()) {
+    	return;
+    }
+context.write(new Text(line[0]), new Text(line[1])); 
+}
+}
+
+
+
+public static class Map_3 extends Mapper<LongWritable, Text, Text, Text> {
+static HashMap<String, String> useraddress;
+public void setup(Context context) throws IOException{
+	Configuration config = context.getConfiguration();
+	useraddress = new HashMap<String, String>();
+	String userDataPath = config.get("userDataPath");
+	Path path = new Path("hdfs://localhost:9000" +userDataPath);
+	FileSystem fs1 = FileSystem.get(config);
+	BufferedReader br1 = new BufferedReader(new InputStreamReader(fs1.open(path)));
+	String userDataInput;
+	userDataInput = br1.readLine();
+	while (userDataInput != null) {
+		String[] tempArray = userDataInput.split(",");
+		if (tempArray.length == 10) {
+			String relevantData = tempArray[3]+","+tempArray[4]+","+tempArray[5];
+			useraddress.put(tempArray[0].trim(), relevantData);
+		}
+		userDataInput = br1.readLine();
+	}
+	br1.close();
+}
+//getting address and user id from this mapper
+
+public void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
+	String[] splitArr = value.toString().split("\t", -1);
+    if (splitArr.length < 2 || splitArr[0].trim().isEmpty() || splitArr[1].trim().isEmpty()) {
+    	return;
+    }
+    //System.out.println("Map 3 splitArr[0]="+splitArr[0]+" splitArr[1]="+splitArr[1]);
+    context.write(new Text(splitArr[0]), new Text(useraddress.get(splitArr[0])+"\t"+splitArr[1]));
+}
+}
+
+//final reducer which joins the values.
+public static class Reduce_2
+extends Reducer<Text, Text, Text, Text> {
+
+public void reduce(DoubleWritable key, Iterable<Text> values, Context context) throws IOException, InterruptedException
+{
+	
+	for (Text iter : values) {
+		System.out.println(iter.toString());
+		
+		context.write(iter, new Text());
+	}
+}
+}
+
+public static void main(String[] args) throws Exception {
+
+ Configuration conf = new Configuration();
+    String[] otherArgs = new GenericOptionsParser(conf, args).getRemainingArgs();
+    // get all args
+    if (otherArgs.length != 5) {
+        System.err.println(otherArgs[0]);
+        System.err.println(otherArgs.length);
+        System.err.println("Usage: MutualFriendsAverage <in> <out>");
+        System.exit(2);
+    }
+    conf.set("userDataPath", otherArgs[3]);
+    JobControl jobControl = new JobControl("jobChain");
+   
+    Job job1 = new Job(conf, "Mutual Friendlist"); 
+  //job 1 gives us the descending order sorted age with userid
+    job1.setJarByClass(MutualInformation.class);
+    job1.setMapperClass(Map.class);
+    job1.setReducerClass(Reduce.class);
+
+    
+    job1.setOutputKeyClass(Text.class);
+    
+    job1.setOutputValueClass(Text.class);
+   
+    FileInputFormat.addInputPath(job1, new Path(otherArgs[1]));
+    
+    FileOutputFormat.setOutputPath(job1, new Path(otherArgs[2]));
+   
+    int code = job1.waitForCompletion(true) ? 0 : 1;
+    System.out.println("job1 finished "+code);
+    
+  
+    
+    Configuration conf2 = new Configuration();
+    Job job2 = new Job(conf, "MutualInformation");
+    job2.setJarByClass(MutualInformation.class);	
+  //gives the join output for top 15 values of average age
+    
+    job2.setOutputKeyClass(Text.class);
+    job2.setOutputValueClass(Text.class);
+    MultipleInputs.addInputPath(job2, new Path(otherArgs[2]), TextInputFormat.class, Map_2.class);
+    MultipleInputs.addInputPath(job2, new Path(otherArgs[2]), TextInputFormat.class, Map_3.class);
+    job2.setReducerClass(Reduce_2.class);
+    
+   
+    FileOutputFormat.setOutputPath(job2, new Path(otherArgs[4]));
+   
+    code = job2.waitForCompletion(true) ? 0 : 1;
+}
+}
